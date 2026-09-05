@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sol y Ruta — Ángulo solar respecto a la carretera</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/3.6.2/maplibre-gl.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/3.6.2/maplibre-gl.min.js"></script>
+<style>
+  :root{
+    --bg:#12151a; --bg-alt:#1b1f27; --border:#262b33;
+    --text:#e7e5e0; --text-dim:#8b92a0;
+    --sun:#f2a93b; --safe:#35c48c; --warn:#e0a72e; --risk:#e5484d; --night:#4a5160;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);}
+  #map{position:absolute;inset:0;}
+  .mono{font-family:ui-monospace,SFMono-Regular,"JetBrains Mono",Consolas,monospace;}
+
+  #topbar{
+    position:absolute;top:12px;left:12px;right:12px;
+    display:flex;justify-content:space-between;align-items:center;gap:8px;
+    pointer-events:none;
+  }
+  #topbar .title{
+    pointer-events:auto;background:var(--bg-alt);border:1px solid var(--border);
+    padding:8px 14px;border-radius:8px;font-size:14px;font-weight:600;letter-spacing:.2px;
+  }
+  #topbar .title span{color:var(--text-dim);font-weight:400;}
+  #topbtns{display:flex;gap:8px;pointer-events:auto;}
+  .btn{
+    background:var(--bg-alt);border:1px solid var(--border);color:var(--text);
+    padding:8px 12px;border-radius:8px;font-size:13px;cursor:pointer;
+  }
+  .btn:hover{border-color:#3a4150;}
+  .btn.active{background:var(--sun);color:#1a1200;border-color:var(--sun);font-weight:600;}
+
+  #panel{
+    position:absolute;left:12px;bottom:12px;width:340px;max-width:calc(100vw - 24px);
+    background:var(--bg-alt);border:1px solid var(--border);border-radius:10px;
+    padding:14px;max-height:calc(100vh - 90px);overflow-y:auto;
+  }
+  #panel h3{margin:0 0 10px;font-size:12px;text-transform:none;color:var(--text-dim);font-weight:600;}
+  .row{display:flex;gap:8px;margin-bottom:10px;}
+  .row > *{flex:1;}
+  label{display:block;font-size:11px;color:var(--text-dim);margin-bottom:4px;}
+  input[type=date], input[type=time]{
+    width:100%;background:#0f1216;border:1px solid var(--border);color:var(--text);
+    padding:6px 8px;border-radius:6px;font-size:13px;
+  }
+  input[type=range]{width:100%;}
+  .readout{
+    display:flex;justify-content:space-between;align-items:baseline;
+    padding:7px 0;border-bottom:1px dashed var(--border);font-size:13px;
+  }
+  .readout:last-child{border-bottom:none;}
+  .readout .val{font-weight:600;}
+  .badge{
+    display:inline-block;padding:3px 9px;border-radius:20px;font-size:12px;font-weight:700;
+  }
+  .badge.safe{background:rgba(53,196,140,.18);color:var(--safe);}
+  .badge.warn{background:rgba(224,167,46,.18);color:var(--warn);}
+  .badge.risk{background:rgba(229,72,77,.18);color:var(--risk);}
+  .badge.night{background:rgba(74,81,96,.25);color:var(--night);}
+  .hint{font-size:11.5px;color:var(--text-dim);line-height:1.5;margin-top:8px;}
+  #scan{margin-top:6px;}
+  #scanbar{display:flex;height:20px;border-radius:4px;overflow:hidden;margin-top:6px;cursor:pointer;}
+  #scanbar div{flex:1;}
+  #scanlabels{display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:2px;}
+  #legend{display:flex;gap:12px;margin-top:10px;font-size:11px;color:var(--text-dim);flex-wrap:wrap;}
+  #legend span{display:inline-flex;align-items:center;gap:5px;}
+  #legend i{width:9px;height:9px;border-radius:2px;display:inline-block;}
+  #routebtns{display:flex;gap:8px;margin-top:6px;}
+  #routebtns .btn{flex:1;text-align:center;}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <div class="title">Sol y Ruta <span>· ángulo solar vs. carretera</span></div>
+  <div id="topbtns">
+    <button class="btn" id="btnBasemap">Satélite</button>
+    <button class="btn" id="btnGeo">Mi ubicación</button>
+  </div>
+</div>
+
+<div id="panel">
+  <h3>MODO</h3>
+  <div class="row">
+    <button class="btn active" id="btnModoPunto">Punto</button>
+    <button class="btn" id="btnModoRuta">Ruta / carretera</button>
+  </div>
+
+  <h3>FECHA Y HORA</h3>
+  <div class="row">
+    <div>
+      <label>Fecha</label>
+      <input type="date" id="fecha">
+    </div>
+    <div>
+      <label>Hora local</label>
+      <input type="time" id="hora" step="60">
+    </div>
+  </div>
+  <input type="range" id="slider" min="0" max="1439" step="1">
+  <div class="row" style="margin-top:8px;">
+    <button class="btn" id="btnAhora" style="flex:1;">Ahora</button>
+  </div>
+
+  <h3>POSICIÓN SOLAR</h3>
+  <div class="readout"><span>Azimut (desde el Norte)</span><span class="val mono" id="rAz">—</span></div>
+  <div class="readout"><span>Elevación</span><span class="val mono" id="rEl">—</span></div>
+  <div class="readout"><span>Estado</span><span class="val" id="rEstado"><span class="badge night">—</span></span></div>
+
+  <div id="rutaPanel" style="display:none;">
+    <h3 style="margin-top:12px;">RUTA</h3>
+    <div class="readout"><span>Tramo más crítico</span><span class="val mono" id="rAngulo">—</span></div>
+    <div class="readout"><span>Riesgo para esta hora</span><span class="val" id="rRiesgo"><span class="badge night">—</span></span></div>
+    <div id="routebtns">
+      <button class="btn" id="btnUndo">Deshacer punto</button>
+      <button class="btn" id="btnClear">Borrar ruta</button>
+    </div>
+    <div id="scan">
+      <button class="btn" id="btnScan" style="width:100%;margin-top:8px;">Buscar mejores franjas del día</button>
+      <div id="scanbar"></div>
+      <div id="scanlabels"><span>00:00</span><span>12:00</span><span>23:59</span></div>
+    </div>
+  </div>
+
+  <div id="legend">
+    <span><i style="background:var(--safe)"></i>Perpendicular (seguro)</span>
+    <span><i style="background:var(--warn)"></i>Intermedio</span>
+    <span><i style="background:var(--risk)"></i>Frontal (riesgo de reflejo)</span>
+  </div>
+
+  <div class="hint" id="hint">Toca el mapa para colocar el punto de captura.</div>
+</div>
+
+<script>
+/* ---------- Posición solar (algoritmo estándar de baja precisión, error < 0.01°) ---------- */
+const RAD = Math.PI/180, DAY_MS = 1000*60*60*24, J1970 = 2440588, J2000 = 2451545;
+const OBLIQ = RAD*23.4397;
+function toJulian(d){ return d.valueOf()/DAY_MS - 0.5 + J1970; }
+function toDays(d){ return toJulian(d) - J2000; }
+function solarMeanAnomaly(d){ return RAD*(357.5291 + 0.98560028*d); }
+function eclipticLongitude(M){
+  const C = RAD*(1.9148*Math.sin(M) + 0.02*Math.sin(2*M) + 0.0003*Math.sin(3*M));
+  const P = RAD*102.9372;
+  return M + C + P + Math.PI;
+}
+function declination(l){ return Math.asin(Math.sin(l)*Math.sin(OBLIQ)); }
+function rightAscension(l){ return Math.atan2(Math.sin(l)*Math.cos(OBLIQ), Math.cos(l)); }
+function siderealTime(d, lw){ return RAD*(280.16 + 360.9856235*d) - lw; }
+
+// devuelve { azimut en grados desde el Norte (0-360, sentido horario), elevacion en grados }
+function solarPosition(date, lat, lon){
+  const lw = RAD*(-lon), phi = RAD*lat, d = toDays(date);
+  const M = solarMeanAnomaly(d), L = eclipticLongitude(M);
+  const dec = declination(L), ra = rightAscension(L);
+  const H = siderealTime(d, lw) - ra;
+  const azSouthCW = Math.atan2(Math.sin(H), Math.cos(H)*Math.sin(phi) - Math.tan(dec)*Math.cos(phi));
+  const alt = Math.asin(Math.sin(phi)*Math.sin(dec) + Math.cos(phi)*Math.cos(dec)*Math.cos(H));
+  let azNorthCW = (azSouthCW/RAD) + 180; // convertir de "sur, horario" a "norte, horario"
+  azNorthCW = ((azNorthCW % 360) + 360) % 360;
+  return { azimuth: azNorthCW, elevation: alt/RAD };
+}
+
+/* ---------- Geometría esférica ---------- */
+function destinationPoint(lat, lon, bearingDeg, distMeters){
+  const R = 6371000, br = bearingDeg*RAD, phi1 = lat*RAD, lam1 = lon*RAD, dR = distMeters/R;
+  const phi2 = Math.asin(Math.sin(phi1)*Math.cos(dR) + Math.cos(phi1)*Math.sin(dR)*Math.cos(br));
+  const lam2 = lam1 + Math.atan2(Math.sin(br)*Math.sin(dR)*Math.cos(phi1), Math.cos(dR)-Math.sin(phi1)*Math.sin(phi2));
+  return [lam2/RAD, phi2/RAD]; // [lon, lat]
+}
+function bearingBetween(lat1, lon1, lat2, lon2){
+  const y = Math.sin((lon2-lon1)*RAD)*Math.cos(lat2*RAD);
+  const x = Math.cos(lat1*RAD)*Math.sin(lat2*RAD) - Math.sin(lat1*RAD)*Math.cos(lat2*RAD)*Math.cos((lon2-lon1)*RAD);
+  return ((Math.atan2(y,x)/RAD)+360)%360;
+}
+function angleToRoad(sunBearing, roadBearing){
+  // 0 = sol alineado con la carretera (frontal), 90 = sol perpendicular (seguro)
+  let diff = Math.abs(sunBearing - roadBearing) % 180;
+  if (diff > 90) diff = 180 - diff;
+  return diff;
+}
+function riskClass(diff){ return diff >= 60 ? 'safe' : diff >= 30 ? 'warn' : 'risk'; }
+function riskLabel(c){ return c==='safe' ? 'Seguro' : c==='warn' ? 'Intermedio' : 'Riesgo de reflejo'; }
+function cardinal(deg){
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSO','SO','OSO','O','ONO','NO','NNO'];
+  return dirs[Math.round(deg/22.5)%16];
+}
+
+/* ---------- Estado ---------- */
+let modo = 'punto'; // 'punto' | 'ruta'
+let punto = [-3.7038, 40.4168]; // Madrid por defecto [lon,lat]
+let rutaPts = [];
+let currentDate = new Date();
+
+/* ---------- Mapa ---------- */
+const OSM_TILES = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'];
+const ESRI_TILES = ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'];
+
+const map = new maplibregl.Map({
+  container:'map',
+  style:{
+    version:8,
+    sources:{
+      osm:{type:'raster', tiles:OSM_TILES, tileSize:256, attribution:'© OpenStreetMap contributors'},
+      esri:{type:'raster', tiles:ESRI_TILES, tileSize:256, attribution:'Esri, Maxar, Earthstar Geographics'}
+    },
+    layers:[
+      {id:'osm-layer', type:'raster', source:'osm'},
+      {id:'esri-layer', type:'raster', source:'esri', layout:{visibility:'none'}}
+    ]
+  },
+  center: punto, zoom: 15
+});
+
+let showingSat = false;
+document.getElementById('btnBasemap').onclick = () => {
+  showingSat = !showingSat;
+  map.setLayoutProperty('osm-layer','visibility', showingSat ? 'none':'visible');
+  map.setLayoutProperty('esri-layer','visibility', showingSat ? 'visible':'none');
+  document.getElementById('btnBasemap').textContent = showingSat ? 'OpenStreetMap' : 'Satélite';
+};
+
+document.getElementById('btnGeo').onclick = () => {
+  if(!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(p=>{
+    punto = [p.coords.longitude, p.coords.latitude];
+    map.flyTo({center:punto, zoom:16});
+    marker.setLngLat(punto);
+    update();
+  });
+};
+
+const marker = new maplibregl.Marker({color:'#f2a93b', draggable:true}).setLngLat(punto).addTo(map);
+marker.on('dragend', ()=>{ punto = [marker.getLngLat().lng, marker.getLngLat().lat]; update(); });
+
+const sunMarkerEl = document.createElement('div');
+sunMarkerEl.style.fontSize = '22px';
+sunMarkerEl.textContent = '☀️';
+const sunMarker = new maplibregl.Marker({element:sunMarkerEl}).setLngLat(punto);
+
+map.on('load', ()=>{
+  map.addSource('ray', {type:'geojson', data:{type:'Feature',geometry:{type:'LineString',coordinates:[punto,punto]}}});
+  map.addLayer({id:'ray-line', type:'line', source:'ray',
+    paint:{'line-color':'#f2a93b','line-width':3,'line-dasharray':[2,1]}});
+
+  map.addSource('route', {type:'geojson', data:{type:'FeatureCollection', features:[]}});
+  map.addLayer({id:'route-line', type:'line', source:'route',
+    paint:{
+      'line-width':6,
+      'line-color': ['match', ['get','risk'],
+        'safe', '#35c48c', 'warn', '#e0a72e', 'risk', '#e5484d', '#4a5160']
+    }});
+
+  sunMarker.addTo(map);
+  update();
+});
+
+map.on('click', (e)=>{
+  const lngLat = [e.lngLat.lng, e.lngLat.lat];
+  if(modo === 'punto'){
+    punto = lngLat;
+    marker.setLngLat(punto);
+  } else {
+    rutaPts.push(lngLat);
+    if(rutaPts.length===1) punto = lngLat, marker.setLngLat(punto);
+    drawRoute();
+  }
+  update();
+});
+
+/* ---------- Controles de fecha/hora ---------- */
+const $fecha = document.getElementById('fecha'), $hora = document.getElementById('hora'), $slider = document.getElementById('slider');
+function setNow(){
+  currentDate = new Date();
+  syncControlsFromDate();
+}
+function syncControlsFromDate(){
+  const pad = n=>String(n).padStart(2,'0');
+  $fecha.value = `${currentDate.getFullYear()}-${pad(currentDate.getMonth()+1)}-${pad(currentDate.getDate())}`;
+  $hora.value = `${pad(currentDate.getHours())}:${pad(currentDate.getMinutes())}`;
+  $slider.value = currentDate.getHours()*60 + currentDate.getMinutes();
+}
+function readControlsToDate(){
+  const [y,m,d] = $fecha.value.split('-').map(Number);
+  const [hh,mm] = $hora.value.split(':').map(Number);
+  currentDate = new Date(y, m-1, d, hh, mm, 0);
+}
+$fecha.onchange = ()=>{ readControlsToDate(); $slider.value = currentDate.getHours()*60+currentDate.getMinutes(); update(); };
+$hora.onchange = ()=>{ readControlsToDate(); $slider.value = currentDate.getHours()*60+currentDate.getMinutes(); update(); };
+$slider.oninput = ()=>{
+  const mins = Number($slider.value);
+  const [y,m,d] = $fecha.value.split('-').map(Number);
+  currentDate = new Date(y, m-1, d, Math.floor(mins/60), mins%60, 0);
+  $hora.value = `${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`;
+  update();
+};
+document.getElementById('btnAhora').onclick = ()=>{ setNow(); update(); };
+setNow();
+
+/* ---------- Modo ---------- */
+const btnPunto = document.getElementById('btnModoPunto'), btnRuta = document.getElementById('btnModoRuta');
+const rutaPanel = document.getElementById('rutaPanel'), hint = document.getElementById('hint');
+btnPunto.onclick = ()=>{ modo='punto'; btnPunto.classList.add('active'); btnRuta.classList.remove('active');
+  rutaPanel.style.display='none'; hint.textContent='Toca el mapa para colocar el punto de captura.'; };
+btnRuta.onclick = ()=>{ modo='ruta'; btnRuta.classList.add('active'); btnPunto.classList.remove('active');
+  rutaPanel.style.display='block'; hint.textContent='Toca el mapa para ir añadiendo puntos de la carretera.'; };
+document.getElementById('btnUndo').onclick = ()=>{ rutaPts.pop(); drawRoute(); update(); };
+document.getElementById('btnClear').onclick = ()=>{ rutaPts=[]; drawRoute(); update(); };
+
+function drawRoute(){
+  if(!map.getSource('route')) return;
+  const feats = [];
+  for(let i=0;i<rutaPts.length-1;i++){
+    const a=rutaPts[i], b=rutaPts[i+1];
+    const brg = bearingBetween(a[1],a[0],b[1],b[0]);
+    feats.push({type:'Feature', properties:{bearing:brg, idx:i}, geometry:{type:'LineString', coordinates:[a,b]}});
+  }
+  map.getSource('route').setData({type:'FeatureCollection', features:feats});
+}
+
+/* ---------- Actualización principal ---------- */
+function metersPerPixel(lat, zoom){ return 156543.03392*Math.cos(lat*RAD)/Math.pow(2,zoom); }
+
+function update(){
+  const sp = solarPosition(currentDate, punto[1], punto[0]);
+  const up = sp.elevation > 0;
+
+  document.getElementById('rAz').textContent = `${sp.azimuth.toFixed(1)}° (${cardinal(sp.azimuth)})`;
+  document.getElementById('rEl').textContent = `${sp.elevation.toFixed(1)}°`;
+  document.getElementById('rEstado').innerHTML = up
+    ? `<span class="badge safe">Sol sobre el horizonte</span>`
+    : `<span class="badge night">Sol bajo el horizonte</span>`;
+
+  // rayo solar: línea a través del punto en el eje azimut, con la marca de sol en el extremo hacia el sol
+  const zoom = map.getZoom ? map.getZoom() : 15;
+  const dist = 40 * metersPerPixel(punto[1], zoom); // ~40px de mitad de línea
+  const sunEnd = destinationPoint(punto[1], punto[0], sp.azimuth, dist);
+  const oppEnd = destinationPoint(punto[1], punto[0], (sp.azimuth+180)%360, dist);
+  if(map.getSource('ray')){
+    map.getSource('ray').setData({type:'Feature', geometry:{type:'LineString', coordinates:[oppEnd, sunEnd]}});
+    map.setPaintProperty('ray-line','line-color', up ? '#f2a93b' : '#4a5160');
+  }
+  sunMarker.setLngLat(sunEnd);
+  sunMarkerEl.style.opacity = up ? '1' : '0.25';
+
+  // ruta
+  if(modo==='ruta' && rutaPts.length>=2 && map.getSource('route')){
+    const data = map.getSource('route')._data || map.getSource('route').serialize().data;
+    let worst = 90, worstBrg = null;
+    const feats = map.getSource('route')._data ? map.getSource('route')._data.features : [];
+    feats.forEach(f=>{
+      const diff = up ? angleToRoad(sp.azimuth, f.properties.bearing) : 90;
+      f.properties.risk = up ? riskClass(diff) : 'night';
+      if(diff < worst){ worst = diff; worstBrg = f.properties.bearing; }
+    });
+    map.getSource('route').setData({type:'FeatureCollection', features:feats});
+    document.getElementById('rAngulo').textContent = up ? `${worst.toFixed(0)}° respecto a la carretera` : '—';
+    document.getElementById('rRiesgo').innerHTML = up
+      ? `<span class="badge ${riskClass(worst)}">${riskLabel(riskClass(worst))}</span>`
+      : `<span class="badge night">Sin sol</span>`;
+  }
+}
+
+/* ---------- Barrido del día para la ruta ---------- */
+document.getElementById('btnScan').onclick = ()=>{
+  if(rutaPts.length<2) return;
+  const feats = map.getSource('route')._data.features;
+  const bar = document.getElementById('scanbar');
+  bar.innerHTML='';
+  const [y,m,d] = $fecha.value.split('-').map(Number);
+  for(let mins=0; mins<1440; mins+=10){
+    const dt = new Date(y,m-1,d, Math.floor(mins/60), mins%60, 0);
+    let worst = 90, hasSun=false;
+    feats.forEach(f=>{
+      const sp = solarPosition(dt, punto[1], punto[0]);
+      if(sp.elevation>0){
+        hasSun=true;
+        const diff = angleToRoad(sp.azimuth, f.properties.bearing);
+        if(diff<worst) worst=diff;
+      }
+    });
+    const cls = !hasSun ? 'night' : riskClass(worst);
+    const color = cls==='safe'?'#35c48c':cls==='warn'?'#e0a72e':cls==='risk'?'#e5484d':'#2a2f38';
+    const div = document.createElement('div');
+    div.style.background = color;
+    div.title = `${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`;
+    div.onclick = ()=>{ $slider.value = mins; $hora.value = div.title;
+      currentDate = new Date(y,m-1,d, Math.floor(mins/60), mins%60,0); update(); };
+    bar.appendChild(div);
+  }
+};
+</script>
+</body>
+</html>
