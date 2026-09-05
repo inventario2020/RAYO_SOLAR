@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Sol y Ruta — Ángulo solar respecto a la carretera</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/3.6.2/maplibre-gl.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/3.6.2/maplibre-gl.min.js"></script>
+<title>SolMap — Ángulo solar respecto a la carretera</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.12.0/maplibre-gl.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/5.12.0/maplibre-gl.min.js"></script>
 <style>
   :root{
     --bg:#12151a; --bg-alt:#1b1f27; --border:#262b33;
@@ -23,11 +23,40 @@
     pointer-events:none;
   }
   #topbar .title{
-    pointer-events:auto;background:var(--bg-alt);border:1px solid var(--border);
-    padding:8px 14px;border-radius:8px;font-size:14px;font-weight:600;letter-spacing:.2px;
+    pointer-events:auto;background:var(--bg-alt);border:1px solid var(--sun);
+    padding:10px 20px;border-radius:9px;font-size:26px;font-weight:900;letter-spacing:.4px;
+    box-shadow:0 0 0 1px rgba(242,169,59,.15), 0 2px 14px rgba(242,169,59,.16);
+    white-space:nowrap;
   }
-  #topbar .title span{color:var(--text-dim);font-weight:400;}
+  #topbar .title .brand{
+    background:linear-gradient(90deg,var(--sun),#ffd27a);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  #topbar .title span{display:none;}
   #topbtns{display:flex;gap:8px;pointer-events:auto;}
+  #searchWrap{position:relative;flex:1;max-width:520px;min-width:220px;pointer-events:auto;}
+  #searchInput{
+    width:100%;background:var(--bg-alt);border:2px solid var(--sun);color:var(--text);
+    padding:12px 16px 12px 38px;border-radius:10px;font-size:15px;font-weight:500;
+    box-shadow:0 0 0 3px rgba(242,169,59,.15), 0 2px 10px rgba(242,169,59,.1);
+  }
+  #searchInput::placeholder{color:var(--text-dim);font-weight:400;}
+  #searchInput:focus{outline:none;border-color:#ffd27a;box-shadow:0 0 0 4px rgba(242,169,59,.25);}
+  #searchWrap::before{
+    content:"🔎";position:absolute;left:13px;top:50%;transform:translateY(-50%);
+    font-size:14px;pointer-events:none;opacity:.9;
+  }
+  #searchResults{
+    display:none;position:absolute;top:calc(100% + 6px);left:0;right:0;
+    background:var(--bg-alt);border:1px solid var(--border);border-radius:8px;
+    max-height:280px;overflow-y:auto;z-index:5;
+  }
+  .searchItem{padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--border);}
+  .searchItem:last-child{border-bottom:none;}
+  .searchItem:hover{background:#242a34;}
+  .searchItem strong{display:block;font-size:13px;font-weight:600;}
+  .searchItem span{display:block;font-size:11px;color:var(--text-dim);margin-top:2px;}
+  .searchItem em{font-style:normal;color:var(--sun);font-size:10px;}
   .btn{
     background:var(--bg-alt);border:1px solid var(--border);color:var(--text);
     padding:8px 12px;border-radius:8px;font-size:13px;cursor:pointer;
@@ -72,6 +101,12 @@
   #legend i{width:9px;height:9px;border-radius:2px;display:inline-block;}
   #routebtns{display:flex;gap:8px;margin-top:6px;}
   #routebtns .btn{flex:1;text-align:center;}
+
+  @media (max-width: 680px){
+    #topbar{flex-wrap:wrap;}
+    #searchWrap{order:3;flex-basis:100%;max-width:100%;}
+    #topbar .title{font-size:19px;padding:8px 14px;}
+  }
 </style>
 </head>
 <body>
@@ -79,7 +114,12 @@
 <div id="map"></div>
 
 <div id="topbar">
-  <div class="title">Sol y Ruta <span>· ángulo solar vs. carretera</span></div>
+  <div class="title"><span class="brand">☀ SolMap</span><span>ángulo solar vs. carretera</span></div>
+
+  <div id="searchWrap">
+    <input id="searchInput" type="text" placeholder="Buscar municipio o carretera…" autocomplete="off">
+    <div id="searchResults"></div>
+  </div>
   <div id="topbtns">
     <button class="btn" id="btnBasemap">Satélite</button>
     <button class="btn" id="btnGeo">Mi ubicación</button>
@@ -110,9 +150,20 @@
   </div>
 
   <h3>POSICIÓN SOLAR</h3>
+  <div class="readout"><span>Amanecer</span><span class="val mono" id="rAmanecer">—</span></div>
+  <div class="readout"><span>Atardecer</span><span class="val mono" id="rAtardecer">—</span></div>
   <div class="readout"><span>Azimut (desde el Norte)</span><span class="val mono" id="rAz">—</span></div>
   <div class="readout"><span>Elevación</span><span class="val mono" id="rEl">—</span></div>
   <div class="readout"><span>Estado</span><span class="val" id="rEstado"><span class="badge night">—</span></span></div>
+
+  <h3>UMBRAL DE MOLESTIA</h3>
+  <div class="row">
+    <div>
+      <label>A partir de esta elevación ya no molesta (°)</label>
+      <input type="number" id="umbral" min="10" max="80" step="1" value="40">
+    </div>
+  </div>
+  <div class="hint">Cuanto más alto está el sol, menos importa si te da de frente: por debajo del umbral se exige más perpendicularidad; a partir del umbral, cualquier orientación se considera segura.</div>
 
   <div id="rutaPanel" style="display:none;">
     <h3 style="margin-top:12px;">RUTA</h3>
@@ -139,6 +190,14 @@
 </div>
 
 <script>
+if (typeof maplibregl === 'undefined') {
+  document.body.innerHTML = '<div style="padding:24px;font-family:sans-serif;color:#e5484d;">'
+    + 'No se ha podido cargar la librería del mapa (MapLibre GL JS) desde el CDN. '
+    + 'Comprueba tu conexión a internet o si algún bloqueador de contenido/red corporativa '
+    + 'está impidiendo el acceso a cdnjs.cloudflare.com.</div>';
+  throw new Error('maplibregl no disponible');
+}
+
 /* ---------- Posición solar (algoritmo estándar de baja precisión, error < 0.01°) ---------- */
 const RAD = Math.PI/180, DAY_MS = 1000*60*60*24, J1970 = 2440588, J2000 = 2451545;
 const OBLIQ = RAD*23.4397;
@@ -187,6 +246,39 @@ function angleToRoad(sunBearing, roadBearing){
 }
 function riskClass(diff){ return diff >= 60 ? 'safe' : diff >= 30 ? 'warn' : 'risk'; }
 function riskLabel(c){ return c==='safe' ? 'Seguro' : c==='warn' ? 'Intermedio' : 'Riesgo de reflejo'; }
+
+// Modelo continuo: cuanto más alta la elevación solar, menos exige el ángulo con la carretera.
+// A partir de "umbral" grados de elevación, cualquier orientación (diff=0, sol de frente) ya se considera segura.
+function angleToRoadEfectivo(diff, elevation, umbral){
+  const elevFactor = Math.min(1, Math.max(0, elevation / umbral));
+  return diff + elevFactor * (90 - diff);
+}
+
+// Amanecer/atardecer del día de currentDate, en la hora local asumida del punto (mismo criterio que el resto de la app).
+// Se busca el cruce de elevación 0° recorriendo el día minuto a minuto y se interpola.
+function sunTimesForDay(date, lat, lon){
+  const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+  let prevEl = null, prevDate = null, sunrise = null, sunset = null;
+  for(let mins = 0; mins <= 1440; mins += 2){
+    const dt = new Date(y, m, d, Math.floor(mins/60), mins%60, 0);
+    const el = solarPosition(dt, lat, lon).elevation;
+    if(prevEl !== null){
+      if(sunrise === null && prevEl < 0 && el >= 0) sunrise = interpolateCruce(prevDate, dt, prevEl, el);
+      if(sunset === null && prevEl >= 0 && el < 0) sunset = interpolateCruce(prevDate, dt, prevEl, el);
+    }
+    prevEl = el; prevDate = dt;
+  }
+  return { sunrise, sunset };
+}
+function interpolateCruce(d1, d2, e1, e2){
+  const frac = e1 / (e1 - e2);
+  return new Date(d1.getTime() + frac * (d2.getTime() - d1.getTime()));
+}
+function formatHora(dt){
+  if(!dt) return '—';
+  const pad = n => String(n).padStart(2,'0');
+  return `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+}
 function cardinal(deg){
   const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSO','SO','OSO','O','ONO','NO','NNO'];
   return dirs[Math.round(deg/22.5)%16];
@@ -303,6 +395,14 @@ $slider.oninput = ()=>{
 document.getElementById('btnAhora').onclick = ()=>{ setNow(); update(); };
 setNow();
 
+let umbralElevacion = 40;
+const $umbral = document.getElementById('umbral');
+$umbral.onchange = ()=>{
+  const v = parseFloat($umbral.value);
+  umbralElevacion = isFinite(v) && v > 0 ? v : 40;
+  update();
+};
+
 /* ---------- Modo ---------- */
 const btnPunto = document.getElementById('btnModoPunto'), btnRuta = document.getElementById('btnModoRuta');
 const rutaPanel = document.getElementById('rutaPanel'), hint = document.getElementById('hint');
@@ -324,12 +424,110 @@ function drawRoute(){
   map.getSource('route').setData({type:'FeatureCollection', features:feats});
 }
 
+/* ---------- Buscador de municipios y carreteras (Nominatim / OSM) ---------- */
+const searchInput = document.getElementById('searchInput');
+const searchResults = document.getElementById('searchResults');
+let searchTimer = null, searchAbort = null;
+
+searchInput.addEventListener('input', ()=>{
+  clearTimeout(searchTimer);
+  const q = searchInput.value.trim();
+  if(q.length < 3){ searchResults.style.display='none'; searchResults.innerHTML=''; return; }
+  searchTimer = setTimeout(()=>doSearch(q), 400);
+});
+document.addEventListener('click', (e)=>{
+  if(!document.getElementById('searchWrap').contains(e.target)) searchResults.style.display='none';
+});
+
+async function doSearch(q){
+  if(searchAbort) searchAbort.abort();
+  searchAbort = new AbortController();
+  const b = map.getBounds();
+  const viewbox = `${b.getWest()},${b.getNorth()},${b.getEast()},${b.getSouth()}`;
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(q)}`
+    + `&limit=8&addressdetails=1&polygon_geojson=1&viewbox=${viewbox}&bounded=0&accept-language=es`;
+  try{
+    const res = await fetch(url, {signal:searchAbort.signal, headers:{'Accept':'application/json'}});
+    const data = await res.json();
+    renderResults(data);
+  }catch(err){
+    if(err.name !== 'AbortError') console.error('Error de búsqueda:', err);
+  }
+}
+
+function tipoResultado(item){
+  if(item.class === 'highway') return 'Carretera / vía';
+  if(item.class === 'boundary' || item.type === 'administrative' || item.class === 'place') return 'Municipio / lugar';
+  return item.type || item.class;
+}
+
+function renderResults(data){
+  searchResults.innerHTML = '';
+  if(!data || !data.length){
+    searchResults.innerHTML = '<div class="searchItem"><span>Sin resultados</span></div>';
+    searchResults.style.display = 'block';
+    return;
+  }
+  data.forEach(item=>{
+    const div = document.createElement('div');
+    div.className = 'searchItem';
+    div.innerHTML = `<strong>${item.display_name.split(',')[0]} <em>· ${tipoResultado(item)}</em></strong><span>${item.display_name}</span>`;
+    div.onclick = ()=> selectResult(item);
+    searchResults.appendChild(div);
+  });
+  searchResults.style.display = 'block';
+}
+
+function fitToCoords(coords){
+  const lons = coords.map(c=>c[0]), lats = coords.map(c=>c[1]);
+  map.fitBounds([[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]], {padding:60, maxZoom:16});
+}
+
+function selectResult(item){
+  searchResults.style.display = 'none';
+  searchInput.value = item.display_name.split(',')[0];
+
+  const geom = item.geojson;
+  const esVia = geom && (geom.type === 'LineString' || geom.type === 'MultiLineString');
+
+  if(esVia){
+    let coords = geom.type === 'LineString' ? geom.coordinates.slice() : [];
+    if(geom.type === 'MultiLineString') geom.coordinates.forEach(line => { coords = coords.concat(line); });
+
+    rutaPts = coords;
+    modo = 'ruta';
+    btnRuta.classList.add('active'); btnPunto.classList.remove('active');
+    rutaPanel.style.display = 'block';
+    hint.textContent = 'Ruta cargada desde la búsqueda: ' + item.display_name.split(',')[0] + '. Puedes seguir tocando el mapa para añadir tramos.';
+
+    punto = rutaPts[0];
+    marker.setLngLat(punto);
+    drawRoute();
+    fitToCoords(coords);
+  } else {
+    punto = [parseFloat(item.lon), parseFloat(item.lat)];
+    marker.setLngLat(punto);
+    map.flyTo({center: punto, zoom: 15});
+  }
+  update();
+}
+
 /* ---------- Actualización principal ---------- */
 function metersPerPixel(lat, zoom){ return 156543.03392*Math.cos(lat*RAD)/Math.pow(2,zoom); }
 
+let _sunTimesCacheKey = null, _sunTimesCache = null;
 function update(){
   const sp = solarPosition(currentDate, punto[1], punto[0]);
   const up = sp.elevation > 0;
+
+  // Amanecer/atardecer: solo se recalculan si cambia el día o la ubicación (evita recalcular en cada tick del slider)
+  const cacheKey = `${currentDate.getFullYear()}-${currentDate.getMonth()}-${currentDate.getDate()}|${punto[0].toFixed(4)},${punto[1].toFixed(4)}`;
+  if(cacheKey !== _sunTimesCacheKey){
+    _sunTimesCache = sunTimesForDay(currentDate, punto[1], punto[0]);
+    _sunTimesCacheKey = cacheKey;
+  }
+  document.getElementById('rAmanecer').textContent = formatHora(_sunTimesCache.sunrise);
+  document.getElementById('rAtardecer').textContent = formatHora(_sunTimesCache.sunset);
 
   document.getElementById('rAz').textContent = `${sp.azimuth.toFixed(1)}° (${cardinal(sp.azimuth)})`;
   document.getElementById('rEl').textContent = `${sp.elevation.toFixed(1)}°`;
@@ -355,7 +553,8 @@ function update(){
     let worst = 90, worstBrg = null;
     const feats = map.getSource('route')._data ? map.getSource('route')._data.features : [];
     feats.forEach(f=>{
-      const diff = up ? angleToRoad(sp.azimuth, f.properties.bearing) : 90;
+      const diffRaw = up ? angleToRoad(sp.azimuth, f.properties.bearing) : 90;
+      const diff = up ? angleToRoadEfectivo(diffRaw, sp.elevation, umbralElevacion) : 90;
       f.properties.risk = up ? riskClass(diff) : 'night';
       if(diff < worst){ worst = diff; worstBrg = f.properties.bearing; }
     });
@@ -381,7 +580,8 @@ document.getElementById('btnScan').onclick = ()=>{
       const sp = solarPosition(dt, punto[1], punto[0]);
       if(sp.elevation>0){
         hasSun=true;
-        const diff = angleToRoad(sp.azimuth, f.properties.bearing);
+        const diffRaw = angleToRoad(sp.azimuth, f.properties.bearing);
+        const diff = angleToRoadEfectivo(diffRaw, sp.elevation, umbralElevacion);
         if(diff<worst) worst=diff;
       }
     });
