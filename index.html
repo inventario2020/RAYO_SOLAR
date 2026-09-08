@@ -69,6 +69,11 @@
     background:var(--bg-alt);border:1px solid var(--border);border-radius:10px;
     padding:14px;max-height:calc(100vh - 90px);overflow-y:auto;
   }
+  #authorTag{
+    position:absolute;right:8px;bottom:6px;z-index:5;pointer-events:none;
+    font-size:10px;color:var(--text-dim);opacity:.55;letter-spacing:.2px;
+    font-family:inherit;user-select:none;
+  }
   #panelHeader{display:none;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;}
   #panelHeader .chevron{color:var(--text-dim);transition:transform .2s ease;font-size:14px;}
   #panel.collapsed #panelHeader .chevron{transform:rotate(-90deg);}
@@ -100,6 +105,12 @@
   #scanbar{display:flex;height:20px;border-radius:4px;overflow:hidden;margin-top:6px;cursor:pointer;}
   #scanbar div{flex:1;}
   #scanlabels{display:flex;justify-content:space-between;font-size:10px;color:var(--text-dim);margin-top:2px;}
+  #scanTooltip{
+    position:fixed;pointer-events:none;z-index:20;display:none;
+    background:#0f1216;border:1px solid var(--sun);border-radius:6px;
+    padding:4px 8px;font-size:11.5px;color:var(--text);white-space:nowrap;
+    box-shadow:0 2px 10px rgba(0,0,0,.4);
+  }
   #legend{display:flex;gap:12px;margin-top:10px;font-size:11px;color:var(--text-dim);flex-wrap:wrap;}
   #legend span{display:inline-flex;align-items:center;gap:5px;}
   #legend i{width:9px;height:9px;border-radius:2px;display:inline-block;}
@@ -115,6 +126,7 @@
       border-radius:14px 14px 0 0;padding:12px 16px 14px;
       max-height:70vh;
     }
+    #authorTag{bottom:56px;}
     #panelHeader{display:flex;padding-bottom:4px;font-size:13px;font-weight:700;color:var(--text-dim);}
     #panel.collapsed{max-height:none;}
     #panel:not(.collapsed) #panelBody{max-height:calc(70vh - 34px);overflow-y:auto;}
@@ -124,6 +136,7 @@
 <body>
 
 <div id="map"></div>
+<div id="authorTag">© Vaguimel</div>
 
 <div id="topbar">
   <div class="title"><span class="brand">☀ SolMap</span><span class="subtitle">ángulo solar vs. carretera</span></div>
@@ -147,7 +160,7 @@
   <h3>MODO</h3>
   <div class="row">
     <button class="btn active" id="btnModoPunto">Punto</button>
-    <button class="btn" id="btnModoRuta">Ruta / carretera</button>
+    <button class="btn" id="btnModoRuta">Ruta</button>
   </div>
 
   <h3>FECHA Y HORA</h3>
@@ -186,6 +199,12 @@
     <h3 style="margin-top:12px;">RUTA</h3>
     <div class="readout"><span>Tramo más crítico</span><span class="val mono" id="rAngulo">—</span></div>
     <div class="readout"><span>Riesgo para esta hora</span><span class="val" id="rRiesgo"><span class="badge night">—</span></span></div>
+    <div class="hint" style="margin-top:2px;">Es el tramo de tu ruta peor orientado respecto al sol a esta hora (más expuesto a que la cámara reciba el reflejo de frente); se resalta con un contorno blanco discontinuo sobre el mapa.</div>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);margin:10px 0 0;cursor:pointer;">
+      <input type="checkbox" id="chkAutoRoad" style="width:auto;margin:0;">
+      Ajustar a la carretera detectada (automático)
+    </label>
+    <div class="hint" id="hintAuto" style="margin-top:2px;">Por defecto, cada toque sobre el mapa coloca un punto exactamente donde tocas, sobre cualquier punto de la cartografía — es lo más fiable. Con esto activado, se intenta además ajustar ese punto al trazado real de la carretera más cercana (requiere internet y puede tardar unos segundos o no encontrar nada si el punto no está sobre una vía cubierta).</div>
     <div id="routebtns">
       <button class="btn" id="btnUndo">Deshacer punto</button>
       <button class="btn" id="btnClear">Borrar ruta</button>
@@ -306,6 +325,8 @@ function cardinal(deg){
 let modo = 'punto'; // 'punto' | 'ruta'
 let punto = [-3.7038, 40.4168]; // Madrid por defecto [lon,lat]
 let rutaPts = [];
+let rutaChunks = []; // cada elemento = los puntos añadidos por una acción (un clic o una búsqueda), para poder deshacer por bloques
+let routeFeatures = []; // copia local de los tramos de la ruta (evita depender de propiedades internas de MapLibre)
 let currentDate = new Date();
 
 /* ---------- Mapa ---------- */
@@ -367,20 +388,93 @@ map.on('load', ()=>{
         'safe', '#35c48c', 'warn', '#e0a72e', 'risk', '#e5484d', '#4a5160']
     }});
 
+  // Contorno blanco discontinuo sobre el tramo más crítico (peor orientado respecto al sol)
+  map.addSource('worst-segment', {type:'geojson', data:{type:'FeatureCollection', features:[]}});
+  map.addLayer({id:'worst-segment-line', type:'line', source:'worst-segment',
+    paint:{'line-width':3,'line-color':'#ffffff','line-dasharray':[1,1.4]}});
+
   sunMarker.addTo(map);
   update();
 });
 
-map.on('click', (e)=>{
+/* ---------- Autotrazado de la carretera bajo el clic ---------- */
+async function traceRoadDipCaceres(lon, lat){
+  const buf = 0.0015; // margen en grados (~150 m) alrededor del clic
+  const bbox = `${lon-buf},${lat-buf},${lon+buf},${lat+buf},CRS:84`;
+  const url = 'https://ide.dip-caceres.es/geoserver/carreteras/wfs'
+    + '?service=WFS&version=2.0.0&request=GetFeature'
+    + '&typeNames=carreteras:Carreteras_de_Diputacion_de_Caceres'
+    + '&outputFormat=application/json&srsName=CRS:84'
+    + '&bbox=' + encodeURIComponent(bbox);
+
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), 8000);
+  try{
+    const resp = await fetch(url, {signal: controller.signal});
+    if(!resp.ok) return null;
+    const data = await resp.json();
+    if(!data.features || !data.features.length) return null;
+    // nos quedamos con la vía cuyo punto más cercano esté más cerca del clic
+    let best = null, bestDist = Infinity;
+    data.features.forEach(f=>{
+      const geom = f.geometry;
+      if(!geom) return;
+      const lines = geom.type === 'LineString' ? [geom.coordinates]
+                  : geom.type === 'MultiLineString' ? geom.coordinates
+                  : [];
+      lines.forEach(line=>{
+        line.forEach(p=>{
+          const d = Math.hypot(p[0]-lon, p[1]-lat);
+          if(d < bestDist){ bestDist = d; best = line; }
+        });
+      });
+    });
+    return best;
+  }catch(e){
+    return null; // sin conexión, CORS, timeout (8s) o servicio caído: se degrada a punto manual
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+const $chkAutoRoad = document.getElementById('chkAutoRoad');
+let autoDetectRoad = false;
+$chkAutoRoad.onchange = ()=>{ autoDetectRoad = $chkAutoRoad.checked; };
+
+map.on('click', async (e)=>{
   const lngLat = [e.lngLat.lng, e.lngLat.lat];
   if(modo === 'punto'){
     punto = lngLat;
     marker.setLngLat(punto);
-  } else {
-    rutaPts.push(lngLat);
-    if(rutaPts.length===1) punto = lngLat, marker.setLngLat(punto);
-    drawRoute();
+    update();
+    return;
   }
+
+  // Modo manual (por defecto): coloca el punto exactamente donde se toca,
+  // en cualquier lugar de la cartografía, sin depender de ningún servicio externo.
+  if(!autoDetectRoad){
+    rutaChunks.push([lngLat]);
+    rutaPts = rutaChunks.flat();
+    if(rutaPts.length){ punto = rutaPts[0]; marker.setLngLat(punto); }
+    hint.textContent = 'Punto añadido a la ruta. Sigue tocando el mapa para trazarla; el color de cada tramo indica el riesgo a esta hora.';
+    drawRoute();
+    update();
+    return;
+  }
+
+  // Modo automático (opcional): intenta ajustar el punto al trazado real de la carretera más cercana.
+  hint.textContent = 'Buscando la carretera bajo el punto…';
+  const coords = await traceRoadDipCaceres(lngLat[0], lngLat[1]);
+  if(coords && coords.length >= 2){
+    rutaChunks.push(coords);
+    hint.textContent = 'Tramo de carretera añadido automáticamente siguiendo su trazado real. Toca otro punto para seguir añadiendo, o "Deshacer punto" para quitar el último tramo añadido.';
+  } else {
+    rutaChunks.push([lngLat]);
+    hint.textContent = 'No se detectó ninguna vía tan cerca: se añadió el punto suelto. Puedes desactivar el ajuste automático para colocar puntos libremente.';
+  }
+  rutaPts = rutaChunks.flat();
+  if(rutaPts.length){ punto = rutaPts[0]; marker.setLngLat(punto); }
+  drawRoute();
   update();
 });
 
@@ -432,7 +526,7 @@ window.addEventListener('resize', ()=>{
   if(!isMobile()) $panel.classList.remove('collapsed');
 });
 function syncPanelHeaderLabel(){
-  $panelHeaderLabel.textContent = 'Controles · ' + (modo === 'ruta' ? 'Ruta / carretera' : 'Punto');
+  $panelHeaderLabel.textContent = 'Controles · ' + (modo === 'ruta' ? 'Ruta' : 'Punto');
 }
 
 /* ---------- Modo ---------- */
@@ -441,10 +535,20 @@ const rutaPanel = document.getElementById('rutaPanel'), hint = document.getEleme
 btnPunto.onclick = ()=>{ modo='punto'; btnPunto.classList.add('active'); btnRuta.classList.remove('active');
   rutaPanel.style.display='none'; hint.textContent='Toca el mapa para colocar el punto de captura.'; syncPanelHeaderLabel(); };
 btnRuta.onclick = ()=>{ modo='ruta'; btnRuta.classList.add('active'); btnPunto.classList.remove('active');
-  rutaPanel.style.display='block'; hint.textContent='Toca el mapa para ir añadiendo puntos de la carretera.'; syncPanelHeaderLabel(); };
+  rutaPanel.style.display='block'; hint.textContent='Toca el mapa para ir añadiendo puntos de la ruta, donde quieras.'; syncPanelHeaderLabel(); };
 syncPanelHeaderLabel();
-document.getElementById('btnUndo').onclick = ()=>{ rutaPts.pop(); drawRoute(); update(); };
-document.getElementById('btnClear').onclick = ()=>{ rutaPts=[]; drawRoute(); update(); };
+const btnUndo = document.getElementById('btnUndo'), btnClear = document.getElementById('btnClear');
+btnUndo.onclick = ()=>{
+  if(!rutaChunks.length) return;
+  rutaChunks.pop();
+  rutaPts = rutaChunks.flat();
+  drawRoute(); update();
+};
+btnClear.onclick = ()=>{
+  if(!rutaChunks.length) return;
+  if(!confirm('¿Borrar toda la ruta? Esta acción no se puede deshacer.')) return;
+  rutaChunks = []; rutaPts = []; drawRoute(); update();
+};
 
 function drawRoute(){
   if(!map.getSource('route')) return;
@@ -454,7 +558,11 @@ function drawRoute(){
     const brg = bearingBetween(a[1],a[0],b[1],b[0]);
     feats.push({type:'Feature', properties:{bearing:brg, idx:i}, geometry:{type:'LineString', coordinates:[a,b]}});
   }
+  routeFeatures = feats; // copia local: la usan update() y el barrido del día, no dependen del store interno de MapLibre
   map.getSource('route').setData({type:'FeatureCollection', features:feats});
+  btnUndo.disabled = rutaChunks.length === 0;
+  btnClear.disabled = rutaChunks.length === 0;
+  btnUndo.style.opacity = btnClear.style.opacity = rutaChunks.length === 0 ? '.5' : '1';
 }
 
 /* ---------- Buscador de municipios y carreteras (Nominatim / OSM) ---------- */
@@ -528,6 +636,7 @@ function selectResult(item){
     if(geom.type === 'MultiLineString') geom.coordinates.forEach(line => { coords = coords.concat(line); });
 
     rutaPts = coords;
+    rutaChunks = [coords];
     modo = 'ruta';
     btnRuta.classList.add('active'); btnPunto.classList.remove('active');
     rutaPanel.style.display = 'block';
@@ -583,51 +692,95 @@ function update(){
 
   // ruta
   if(modo==='ruta' && rutaPts.length>=2 && map.getSource('route')){
-    const data = map.getSource('route')._data || map.getSource('route').serialize().data;
-    let worst = 90, worstBrg = null;
-    const feats = map.getSource('route')._data ? map.getSource('route')._data.features : [];
-    feats.forEach(f=>{
+    let worst = 90, worstFeat = null;
+    routeFeatures.forEach(f=>{
       const diffRaw = up ? angleToRoad(sp.azimuth, f.properties.bearing) : 90;
       const diff = up ? angleToRoadEfectivo(diffRaw, sp.elevation, umbralElevacion) : 90;
       f.properties.risk = up ? riskClass(diff) : 'night';
-      if(diff < worst){ worst = diff; worstBrg = f.properties.bearing; }
+      if(diff < worst){ worst = diff; worstFeat = f; }
     });
-    map.getSource('route').setData({type:'FeatureCollection', features:feats});
-    document.getElementById('rAngulo').textContent = up ? `${worst.toFixed(0)}° respecto a la carretera` : '—';
-    document.getElementById('rRiesgo').innerHTML = up
-      ? `<span class="badge ${riskClass(worst)}">${riskLabel(riskClass(worst))}</span>`
-      : `<span class="badge night">Sin sol</span>`;
+    map.getSource('route').setData({type:'FeatureCollection', features:routeFeatures});
+
+    if(up && worstFeat){
+      document.getElementById('rAngulo').textContent =
+        `${worst.toFixed(0)}° respecto al sol (tramo orientado a ${cardinal(worstFeat.properties.bearing)})`;
+      document.getElementById('rRiesgo').innerHTML = `<span class="badge ${riskClass(worst)}">${riskLabel(riskClass(worst))}</span>`;
+      // resalta ese tramo en el mapa con un contorno blanco discontinuo
+      if(map.getSource('worst-segment')){
+        map.getSource('worst-segment').setData(worstFeat);
+      }
+    } else {
+      document.getElementById('rAngulo').textContent = '—';
+      document.getElementById('rRiesgo').innerHTML = `<span class="badge night">Sin sol</span>`;
+      if(map.getSource('worst-segment')) map.getSource('worst-segment').setData({type:'FeatureCollection', features:[]});
+    }
+  } else if(map.getSource('worst-segment')){
+    map.getSource('worst-segment').setData({type:'FeatureCollection', features:[]});
   }
 }
 
 /* ---------- Barrido del día para la ruta ---------- */
+function getScanTooltip(){
+  let t = document.getElementById('scanTooltip');
+  if(!t){ t = document.createElement('div'); t.id='scanTooltip'; document.body.appendChild(t); }
+  return t;
+}
+function scanClassLabel(cls){ return cls==='night' ? 'Sin sol' : riskLabel(cls); }
+function positionScanTooltip(ev){
+  const t = getScanTooltip();
+  const pad = 12;
+  let left = ev.clientX + pad, top = ev.clientY - 34;
+  if(left + 140 > window.innerWidth) left = ev.clientX - 140 - pad;
+  if(top < 4) top = ev.clientY + pad;
+  t.style.left = left + 'px'; t.style.top = top + 'px';
+}
+
 document.getElementById('btnScan').onclick = ()=>{
-  if(rutaPts.length<2) return;
-  const feats = map.getSource('route')._data.features;
+  if(routeFeatures.length<1){
+    const bar = document.getElementById('scanbar');
+    bar.innerHTML = '';
+    hint.textContent = 'Añade al menos un punto de ruta (toca el mapa en modo Ruta) antes de buscar las mejores franjas.';
+    return;
+  }
   const bar = document.getElementById('scanbar');
   bar.innerHTML='';
   const [y,m,d] = $fecha.value.split('-').map(Number);
   for(let mins=0; mins<1440; mins+=10){
     const dt = new Date(y,m-1,d, Math.floor(mins/60), mins%60, 0);
     let worst = 90, hasSun=false;
-    feats.forEach(f=>{
-      const sp = solarPosition(dt, punto[1], punto[0]);
-      if(sp.elevation>0){
-        hasSun=true;
+    const sp = solarPosition(dt, punto[1], punto[0]);
+    if(sp.elevation>0){
+      hasSun=true;
+      routeFeatures.forEach(f=>{
         const diffRaw = angleToRoad(sp.azimuth, f.properties.bearing);
         const diff = angleToRoadEfectivo(diffRaw, sp.elevation, umbralElevacion);
         if(diff<worst) worst=diff;
-      }
-    });
+      });
+    }
     const cls = !hasSun ? 'night' : riskClass(worst);
     const color = cls==='safe'?'#35c48c':cls==='warn'?'#e0a72e':cls==='risk'?'#e5484d':'#2a2f38';
+    const horaTxt = `${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`;
     const div = document.createElement('div');
     div.style.background = color;
-    div.title = `${String(Math.floor(mins/60)).padStart(2,'0')}:${String(mins%60).padStart(2,'0')}`;
-    div.onclick = ()=>{ $slider.value = mins; $hora.value = div.title;
+    div.title = horaTxt;
+    div.onclick = ()=>{ $slider.value = mins; $hora.value = horaTxt;
       currentDate = new Date(y,m-1,d, Math.floor(mins/60), mins%60,0); update(); };
+    const tooltipText = `${horaTxt} · ${scanClassLabel(cls)}`;
+    div.addEventListener('mouseenter', (ev)=>{
+      const t = getScanTooltip(); t.textContent = tooltipText; t.style.display = 'block';
+      positionScanTooltip(ev);
+    });
+    div.addEventListener('mousemove', positionScanTooltip);
+    div.addEventListener('mouseleave', ()=>{ getScanTooltip().style.display = 'none'; });
+    div.addEventListener('touchstart', (ev)=>{
+      const t = getScanTooltip(); t.textContent = tooltipText; t.style.display = 'block';
+      const touch = ev.touches[0];
+      positionScanTooltip({clientX: touch.clientX, clientY: touch.clientY});
+    }, {passive:true});
     bar.appendChild(div);
   }
+  // Etiquetas horarias: se dejan las tres originales (00:00, 12:00, 23:59);
+  // la hora exacta de cada franja ahora se ve con el tooltip al pasar el cursor.
 };
 </script>
 </body>
