@@ -71,8 +71,12 @@
   }
   #authorTag{
     position:absolute;right:8px;bottom:6px;z-index:5;pointer-events:none;
-    font-size:10px;color:var(--text-dim);opacity:.55;letter-spacing:.2px;
+    font-size:10px;color:var(--sun);opacity:.85;letter-spacing:.2px;
     font-family:inherit;user-select:none;
+    background:#000;padding:4px 11px;border-radius:7px;
+    border:1px solid var(--border);
+    text-shadow:0 0 6px rgba(242,169,59,.55);
+    box-shadow:0 2px 8px rgba(0,0,0,.5);
   }
   #panelHeader{display:none;justify-content:space-between;align-items:center;cursor:pointer;user-select:none;}
   #panelHeader .chevron{color:var(--text-dim);transition:transform .2s ease;font-size:14px;}
@@ -116,6 +120,20 @@
   #legend i{width:9px;height:9px;border-radius:2px;display:inline-block;}
   #routebtns{display:flex;gap:8px;margin-top:6px;}
   #routebtns .btn{flex:1;text-align:center;}
+
+  #timeStepperRow{display:flex;gap:18px;margin-top:8px;align-items:flex-end;}
+  .stepperGroup{display:flex;flex-direction:column;align-items:center;gap:3px;}
+  .stepperGroup .stepperLabel{font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.3px;}
+  .stepperArrows{display:flex;flex-direction:column;}
+  .stepBtn{
+    background:var(--bg-alt);border:1px solid var(--border);color:var(--text);
+    width:34px;height:19px;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;font-size:9px;line-height:1;padding:0;
+  }
+  .stepBtn:first-child{border-radius:6px 6px 0 0;border-bottom:none;}
+  .stepBtn:last-child{border-radius:0 0 6px 6px;}
+  .stepBtn:hover{border-color:#3a4150;background:#20242c;}
+  .stepBtn:active{background:var(--sun);color:#1a1200;border-color:var(--sun);}
 
   @media (max-width: 680px){
     #topbar{flex-wrap:wrap;}
@@ -164,17 +182,31 @@
   </div>
 
   <h3>FECHA Y HORA</h3>
-  <div class="row">
-    <div>
-      <label>Fecha</label>
-      <input type="date" id="fecha">
-    </div>
-    <div>
-      <label>Hora local</label>
-      <input type="time" id="hora" step="60">
+  <div>
+    <label>Fecha</label>
+    <input type="date" id="fecha" style="width:100%;">
+  </div>
+  <div style="margin-top:10px;">
+    <label>Hora local</label>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <input type="time" id="hora" step="60" style="flex:1;">
+      <div class="stepperGroup">
+        <span class="stepperLabel">Hora</span>
+        <div class="stepperArrows">
+          <button class="stepBtn" id="btnHoraArriba" title="Sumar 1 hora">▲</button>
+          <button class="stepBtn" id="btnHoraAbajo" title="Restar 1 hora">▼</button>
+        </div>
+      </div>
+      <div class="stepperGroup">
+        <span class="stepperLabel">Min</span>
+        <div class="stepperArrows">
+          <button class="stepBtn" id="btnMinArriba" title="Sumar 1 minuto">▲</button>
+          <button class="stepBtn" id="btnMinAbajo" title="Restar 1 minuto">▼</button>
+        </div>
+      </div>
     </div>
   </div>
-  <input type="range" id="slider" min="0" max="1439" step="1">
+  <input type="range" id="slider" min="0" max="1439" step="1" style="margin-top:10px;">
   <div class="row" style="margin-top:8px;">
     <button class="btn" id="btnAhora" style="flex:1;">Ahora</button>
   </div>
@@ -204,7 +236,7 @@
       <input type="checkbox" id="chkAutoRoad" style="width:auto;margin:0;">
       Ajustar a la carretera detectada (automático)
     </label>
-    <div class="hint" id="hintAuto" style="margin-top:2px;">Por defecto, cada toque sobre el mapa coloca un punto exactamente donde tocas, sobre cualquier punto de la cartografía — es lo más fiable. Con esto activado, se intenta además ajustar ese punto al trazado real de la carretera más cercana (requiere internet y puede tardar unos segundos o no encontrar nada si el punto no está sobre una vía cubierta).</div>
+    <div class="hint" id="hintAuto" style="margin-top:2px;">Por defecto, cada toque sobre el mapa coloca un punto exactamente donde tocas, sobre cualquier punto de la cartografía.</div>
     <div id="routebtns">
       <button class="btn" id="btnUndo">Deshacer punto</button>
       <button class="btn" id="btnClear">Borrar ruta</button>
@@ -323,7 +355,7 @@ function cardinal(deg){
 
 /* ---------- Estado ---------- */
 let modo = 'punto'; // 'punto' | 'ruta'
-let punto = [-3.7038, 40.4168]; // Madrid por defecto [lon,lat]
+let punto = [-6.37928, 39.46836]; // Cruz de los Caídos, Cáceres, por defecto [lon,lat] (misma vista inicial que el complemento de QGIS)
 let rutaPts = [];
 let rutaChunks = []; // cada elemento = los puntos añadidos por una acción (un clic o una búsqueda), para poder deshacer por bloques
 let routeFeatures = []; // copia local de los tramos de la ruta (evita depender de propiedades internas de MapLibre)
@@ -505,6 +537,21 @@ $slider.oninput = ()=>{
   update();
 };
 document.getElementById('btnAhora').onclick = ()=>{ setNow(); update(); };
+
+// Sumar/restar hora o minuto: se usa aritmética directa sobre el objeto Date
+// (milisegundos), que ya resuelve el acarreo en ambos sentidos — al sumar 1
+// minuto estando en :59 pasa automáticamente a la siguiente hora (:00), y al
+// restar 1 minuto estando en :00 retrocede a la hora anterior en :59.
+function stepTime(deltaMinutes){
+  currentDate = new Date(currentDate.getTime() + deltaMinutes*60000);
+  syncControlsFromDate();
+  update();
+}
+document.getElementById('btnHoraArriba').onclick = ()=> stepTime(60);
+document.getElementById('btnHoraAbajo').onclick = ()=> stepTime(-60);
+document.getElementById('btnMinArriba').onclick = ()=> stepTime(1);
+document.getElementById('btnMinAbajo').onclick = ()=> stepTime(-1);
+
 setNow();
 
 let umbralElevacion = 40;
